@@ -1,0 +1,47 @@
+body {
+  margin: 0;
+  font-family: 'Arial', sans-serif;
+}
+
+.navbar {
+  display: flex;
+  justify-content: space-between;
+  padding: 1rem 2rem;
+  background: #f3f3f3;
+}
+
+.nav-links {
+  list-style: none;
+  display: flex;
+  gap: 1rem;
+}
+
+.hero {
+  background-color: #ffe5ec;
+  padding: 4rem;
+  text-align: center;
+}
+
+.search-section {
+  padding: 2rem;
+  text-align: center;
+}
+
+.pets-section {
+  padding: 2rem;
+  text-align: center;
+}
+
+.pets-container {
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.pet-card {
+  background: #fafafa;
+  padding: 1rem;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+}
