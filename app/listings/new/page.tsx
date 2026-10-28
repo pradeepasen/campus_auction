@@ -27,8 +27,9 @@ export default function CreateListingPage() {
 
   // File upload handler
   async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+    const files = Array.from(e.currentTarget.files ?? []);
+    e.target.value = "";
+    if (files.length === 0) return;
 
     if (photos.length + files.length > 5) {
       setError("Maximum 5 photos allowed per listing.");
@@ -40,21 +41,24 @@ export default function CreateListingPage() {
 
     try {
       const formData = new FormData();
-      Array.from(files).forEach((file) => formData.append("files", file));
+      files.forEach((file) => formData.append("files", file));
 
       const res = await fetch("/api/upload", {
         method: "POST",
         body: formData,
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error || "Upload failed");
+        throw new Error(data.error || `Upload failed (HTTP ${res.status}).`);
       }
 
+      if (!Array.isArray(data.urls) || data.urls.length !== files.length) {
+        throw new Error("The server did not confirm every image upload. Please try again.");
+      }
       setPhotos((prev) => [...prev, ...data.urls]);
-    } catch (err: any) {
-      setError(err.message || "Failed to upload photo");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to upload photo.");
     } finally {
       setUploading(false);
     }
@@ -264,10 +268,10 @@ export default function CreateListingPage() {
                 <div className="flex flex-col sm:flex-row sm:items-center gap-3">
                   <label className="cursor-pointer inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border-2 border-dashed border-slate-300 hover:border-blue-500 text-slate-600 hover:text-blue-600 text-xs font-semibold transition bg-slate-50 hover:bg-blue-50/50">
                     <Upload className="w-4 h-4" />
-                    <span>{uploading ? "Uploading..." : "Upload from Computer (Max 5MB)"}</span>
+                    <span>{uploading ? "Uploading..." : "Upload JPEG, PNG, or WebP (Max 5MB)"}</span>
                     <input
                       type="file"
-                      accept="image/*"
+                    accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
                       multiple
                       onChange={handleFileUpload}
                       disabled={uploading}
@@ -367,7 +371,7 @@ export default function CreateListingPage() {
             </Link>
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || uploading}
               className="px-6 py-2.5 rounded-xl bg-blue-600 text-white font-bold text-sm hover:bg-blue-700 transition shadow-sm disabled:opacity-50 flex items-center gap-2"
             >
               <PlusCircle className="w-4 h-4" />

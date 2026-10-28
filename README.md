@@ -98,3 +98,9 @@ Open `/login` and choose **Create one**. Register with your name, a unique usern
 5. **Server-Side Enforcement**:
    - Central rule service in `lib/auction-service.ts`.
    - Automatic background closing tick (`/api/tick`) synchronized every 2 seconds. Every read query also evaluates expired listings to ensure an auction is never displayed as active past its deadline.
+
+6. **Public Automatic Bidding**:
+   - Buyers can set, raise, or remove a public maximum while an auction is active; sellers cannot set a maximum on their own listing.
+   - Proxy bids are processed in the same database transaction as the triggering bid, respect the minimum increment and closing time, and never exceed the bidder's maximum.
+   - Competing maxima determine the leading bidder and price; equal maxima favor the earlier maximum. Automatic bids appear in the public bid history.
+   - The auction page lists active maximums and provides controls for managing the signed-in buyer's maximum.

@@ -76,6 +76,8 @@ export default function ListingDetailPage() {
   // Action states
   const [bidAmount, setBidAmount] = useState<string>("");
   const [biddingLoading, setBiddingLoading] = useState(false);
+  const [maximumBidAmount, setMaximumBidAmount] = useState("");
+  const [maximumBidLoading, setMaximumBidLoading] = useState(false);
   const [actionError, setActionError] = useState("");
   const [actionSuccess, setActionSuccess] = useState("");
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -184,6 +186,66 @@ export default function ListingDetailPage() {
       setActionError(err.message || "Failed to place bid");
     } finally {
       setBiddingLoading(false);
+    }
+  }
+
+  async function handleMaximumBid(e: React.FormEvent) {
+    e.preventDefault();
+    setActionError("");
+    setActionSuccess("");
+    if (!currentUser) {
+      router.push("/login");
+      return;
+    }
+
+    const maxAmount = Number(maximumBidAmount);
+    if (!Number.isFinite(maxAmount) || maxAmount < minValidBid) {
+      setActionError(`Maximum bid must be at least ₹${minValidBid.toLocaleString("en-IN")}.`);
+      return;
+    }
+
+    setMaximumBidLoading(true);
+    try {
+      const response = await fetch("/api/auto-bids", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ listingId, maxAmount }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Failed to set maximum bid.");
+
+      setActionSuccess(
+        data.leaderId === currentUser.id
+          ? `Maximum bid set to ₹${maxAmount.toLocaleString("en-IN")}. You are in the lead.`
+          : `Maximum bid set to ₹${maxAmount.toLocaleString("en-IN")}. Automatic bidding is active.`
+      );
+      await loadListing(true);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to set maximum bid.");
+    } finally {
+      setMaximumBidLoading(false);
+    }
+  }
+
+  async function handleRemoveMaximumBid() {
+    setActionError("");
+    setActionSuccess("");
+    setMaximumBidLoading(true);
+    try {
+      const response = await fetch("/api/auto-bids", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ listingId, remove: true }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Failed to remove maximum bid.");
+      setMaximumBidAmount("");
+      setActionSuccess("Your maximum bid has been removed.");
+      await loadListing(true);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to remove maximum bid.");
+    } finally {
+      setMaximumBidLoading(false);
     }
   }
 
@@ -601,6 +663,76 @@ export default function ListingDetailPage() {
                   </div>
                 )}
               </div>
+            )}
+          </div>
+
+          {/* Public maximum bids and buyer controls */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+            <h3 className="font-bold text-slate-900 text-sm mb-1">Public Maximum Bids</h3>
+            <p className="text-[11px] text-slate-500 mb-3">
+              Buyers can see each active bidder’s maximum. The system only bids as needed, up to that limit.
+            </p>
+            {listing.autoBids.length === 0 ? (
+              <p className="text-xs text-slate-400 py-2">No maximum bids have been set.</p>
+            ) : (
+              <ul className="divide-y divide-slate-100 mb-4">
+                {listing.autoBids.map((autoBid) => (
+                  <li key={autoBid.id} className="py-2 flex items-center justify-between text-xs">
+                    <span className="font-semibold text-slate-700">@{autoBid.bidder.username}</span>
+                    <span className="font-mono font-bold text-slate-900">
+                      ₹{autoBid.maxAmount.toLocaleString("en-IN")}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {listing.status === "ACTIVE" && !isSeller && (
+              <form onSubmit={handleMaximumBid} className="pt-3 border-t border-slate-100">
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  {listing.autoBids.some((item) => item.bidder.id === currentUser?.id)
+                    ? "Raise your maximum bid (₹)"
+                    : "Set maximum bid (₹)"}
+                </label>
+                <input
+                  type="number"
+                  min={minValidBid}
+                  step="1"
+                  value={
+                    maximumBidAmount ||
+                    listing.autoBids
+                      .find((item) => item.bidder.id === currentUser?.id)
+                      ?.maxAmount.toString() ||
+                    ""
+                  }
+                  onChange={(event) => setMaximumBidAmount(event.target.value)}
+                  placeholder={`At least ₹${minValidBid.toLocaleString("en-IN")}`}
+                  required
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Minimum maximum: ₹{minValidBid.toLocaleString("en-IN")}. Your limit is public; bids never exceed it.
+                </p>
+                <div className="flex gap-2 mt-3">
+                  <button
+                    type="submit"
+                    disabled={maximumBidLoading}
+                    className="flex-1 py-2 rounded-lg bg-purple-600 text-white text-xs font-bold hover:bg-purple-700 disabled:opacity-50"
+                  >
+                    {maximumBidLoading ? "Saving..." : "Set maximum bid"}
+                  </button>
+                  {listing.autoBids.some((item) => item.bidder.id === currentUser?.id) && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveMaximumBid}
+                      disabled={maximumBidLoading}
+                      className="px-3 py-2 rounded-lg border border-slate-300 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              </form>
             )}
           </div>
 

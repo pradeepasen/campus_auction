@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 
 export interface CreateListingInput {
@@ -82,6 +83,16 @@ export async function syncAuctionClosing(listingId?: string) {
             type: "APPROVAL_NEEDED",
             title: "Action Needed: Approve Winning Price",
             message: `Your auction "${listing.title}" closed with a winning bid of ₹${highestBid.amount} from @${highestBid.bidder.username}. Please approve or reject.`,
+            listingId: listing.id,
+            link: `/listings/${listing.id}`,
+          },
+        });
+        await tx.notification.create({
+          data: {
+            userId: listing.sellerId,
+            type: "AUCTION_CLOSED",
+            title: "Auction Closed",
+            message: `Your auction "${listing.title}" has closed with a high bid of ₹${highestBid.amount}.`,
             listingId: listing.id,
             link: `/listings/${listing.id}`,
           },
@@ -548,152 +559,147 @@ export async function getListings(filters: ListingsFilter = {}) {
   });
 }
 
-// Bidding execution inside a single database transaction
-export async function placeBid(bidderId: string, listingId: string, bidAmount: number) {
-  return await prisma.$transaction(async (tx) => {
-    const now = new Date();
-
-    const listing = await tx.listing.findUnique({
-      where: { id: listingId },
-      include: {
-        bids: {
-          orderBy: { amount: "desc" },
-          take: 1,
-          include: { bidder: { select: { id: true, username: true } } },
-        },
-        autoBids: {
-          where: { active: true },
-          orderBy: { maxAmount: "desc" },
-          include: { bidder: { select: { id: true, username: true } } },
-        },
+async function executeBid(
+  tx: Prisma.TransactionClient,
+  bidderId: string,
+  listingId: string,
+  bidAmount: number,
+  isAutoBidTrigger = false
+) {
+  const now = new Date();
+  const listing = await tx.listing.findUnique({
+    where: { id: listingId },
+    include: {
+      bids: {
+        orderBy: [{ amount: "desc" }, { createdAt: "asc" }],
+        take: 1,
+        include: { bidder: { select: { id: true, username: true } } },
       },
-    });
+      autoBids: {
+        where: { active: true },
+        orderBy: [{ maxAmount: "desc" }, { createdAt: "asc" }],
+      },
+    },
+  });
 
-    if (!listing) {
-      throw new Error("Listing not found.");
+  if (!listing) throw new Error("Listing not found.");
+  if (listing.sellerId === bidderId) {
+    throw new Error("A seller cannot bid on their own listing.");
+  }
+  if (listing.status !== "ACTIVE" || listing.closingAt <= now) {
+    throw new Error("Auction has closed. Bids can no longer be accepted.");
+  }
+
+  const highestBid = listing.bids[0];
+  const minRequired = highestBid
+    ? highestBid.amount + listing.minIncrement
+    : listing.startingPrice;
+  if (!Number.isFinite(bidAmount) || bidAmount < minRequired) {
+    throw new Error(`Bid amount must be at least ₹${minRequired.toLocaleString("en-IN")}.`);
+  }
+
+  const triggerBid = await tx.bid.create({
+    data: { listingId, bidderId, amount: bidAmount, isAutoBid: isAutoBidTrigger },
+  });
+
+  const contenders = listing.autoBids.map((autoBid) => ({
+    bidderId: autoBid.bidderId,
+    maximum: autoBid.bidderId === bidderId
+      ? Math.max(autoBid.maxAmount, bidAmount)
+      : autoBid.maxAmount,
+    createdAt: autoBid.createdAt,
+  }));
+  if (!contenders.some((contender) => contender.bidderId === bidderId)) {
+    contenders.push({ bidderId, maximum: bidAmount, createdAt: now });
+  }
+
+  contenders.sort((a, b) => {
+    if (a.maximum !== b.maximum) return b.maximum - a.maximum;
+    if (!isAutoBidTrigger) {
+      if (a.bidderId === bidderId) return -1;
+      if (b.bidderId === bidderId) return 1;
     }
+    return a.createdAt.getTime() - b.createdAt.getTime() ||
+      a.bidderId.localeCompare(b.bidderId);
+  });
 
-    if (listing.sellerId === bidderId) {
-      throw new Error("A seller cannot bid on their own listing.");
-    }
+  const winner = contenders[0];
+  const runnerUp = contenders[1];
+  const currentLeadAmount = Math.min(
+    winner.maximum,
+    Math.max(bidAmount, runnerUp ? runnerUp.maximum + listing.minIncrement : bidAmount)
+  );
+  const currentLeaderId = winner.bidderId;
+  let leadingBid = triggerBid;
 
-    if (listing.status !== "ACTIVE" || listing.closingAt <= now) {
-      throw new Error("Auction has closed. Bids can no longer be accepted.");
-    }
-
-    const highestBid = listing.bids[0];
-    const minRequired = highestBid
-      ? highestBid.amount + listing.minIncrement
-      : listing.startingPrice;
-
-    if (bidAmount < minRequired) {
-      throw new Error(
-        `Bid amount must be at least ₹${minRequired.toLocaleString("en-IN")}.`
-      );
-    }
-
-    // Key Feature 1: Last-minute extensions
-    // If valid bid arrives in the last 30 seconds before closing,
-    // set closing time to 60 seconds after that bid.
-    let newClosingAt = listing.closingAt;
-    let wasExtended = false;
-    const msUntilClosing = listing.closingAt.getTime() - now.getTime();
-    if (msUntilClosing <= 30 * 1000 && msUntilClosing > 0) {
-      newClosingAt = new Date(now.getTime() + 60 * 1000);
-      wasExtended = true;
-    }
-
-    // Insert user manual bid
-    const newBid = await tx.bid.create({
+  if (currentLeadAmount > bidAmount) {
+    leadingBid = await tx.bid.create({
       data: {
         listingId,
-        bidderId,
-        amount: bidAmount,
-        isAutoBid: false,
+        bidderId: currentLeaderId,
+        amount: currentLeadAmount,
+        isAutoBid: true,
       },
     });
+  }
 
-    let currentLeadAmount = bidAmount;
-    let currentLeaderId = bidderId;
+  let newClosingAt = listing.closingAt;
+  let wasExtended = false;
+  const msUntilClosing = listing.closingAt.getTime() - now.getTime();
+  if (msUntilClosing > 0 && msUntilClosing <= 30_000) {
+    newClosingAt = new Date(now.getTime() + 60_000);
+    wasExtended = true;
+  }
 
-    // Key Feature 2: Automatic bidding evaluation
-    // Check if an existing auto-bid exists for someone else that can contest this manual bid
-    const rivalAutoBid = listing.autoBids.find((ab) => ab.bidderId !== bidderId);
+  await tx.listing.update({
+    where: { id: listingId },
+    data: {
+      currentPrice: currentLeadAmount,
+      closingAt: newClosingAt,
+      extensionCount: wasExtended ? listing.extensionCount + 1 : listing.extensionCount,
+    },
+  });
 
-    if (rivalAutoBid) {
-      if (rivalAutoBid.maxAmount > currentLeadAmount) {
-        // Auto-bid triggers! Escalate to min(rivalMax, currentLeadAmount + minIncrement)
-        const autoBidAmount = Math.min(
-          rivalAutoBid.maxAmount,
-          currentLeadAmount + listing.minIncrement
-        );
-
-        await tx.bid.create({
-          data: {
-            listingId,
-            bidderId: rivalAutoBid.bidderId,
-            amount: autoBidAmount,
-            isAutoBid: true,
-          },
-        });
-
-        currentLeadAmount = autoBidAmount;
-        currentLeaderId = rivalAutoBid.bidderId;
-
-        // Notify the manual bidder that they were immediately outbid by auto-bid
-        await tx.notification.create({
-          data: {
-            userId: bidderId,
-            type: "OUTBID",
-            title: "Outbid by Auto-Bidder!",
-            message: `Your bid of ₹${bidAmount} on "${listing.title}" was instantly outbid by an automatic bid of ₹${autoBidAmount}.`,
-            listingId,
-            link: `/listings/${listingId}`,
-          },
-        });
-      } else {
-        // The manual bid exceeded or matched the auto-bidder's max
-        await tx.notification.create({
-          data: {
-            userId: rivalAutoBid.bidderId,
-            type: "OUTBID",
-            title: "You Were Outbid!",
-            message: `Your auto-bid limit of ₹${rivalAutoBid.maxAmount} on "${listing.title}" was surpassed by a bid of ₹${bidAmount}.`,
-            listingId,
-            link: `/listings/${listingId}`,
-          },
-        });
-      }
-    } else if (highestBid && highestBid.bidderId !== bidderId) {
-      // Regular outbid notification
-      await tx.notification.create({
-        data: {
-          userId: highestBid.bidderId,
-          type: "OUTBID",
-          title: "You Were Outbid!",
-          message: `Someone placed a higher bid of ₹${bidAmount} on "${listing.title}".`,
-          listingId,
-          link: `/listings/${listingId}`,
-        },
-      });
-    }
-
-    // Update listing currentPrice and extension if applicable
-    await tx.listing.update({
-      where: { id: listingId },
+  const outbidUserIds = new Set<string>();
+  if (highestBid && highestBid.bidderId !== currentLeaderId) {
+    outbidUserIds.add(highestBid.bidderId);
+  }
+  if (bidderId !== currentLeaderId) outbidUserIds.add(bidderId);
+  for (const userId of Array.from(outbidUserIds)) {
+    await tx.notification.create({
       data: {
-        currentPrice: currentLeadAmount,
-        closingAt: newClosingAt,
-        extensionCount: wasExtended ? listing.extensionCount + 1 : listing.extensionCount,
+        userId,
+        type: "OUTBID",
+        title: "You Were Outbid!",
+        message: `A higher bid of ₹${currentLeadAmount.toLocaleString("en-IN")} was placed on "${listing.title}".`,
+        listingId,
+        link: `/listings/${listingId}`,
       },
     });
+  }
 
-    if (wasExtended) {
-      // Notify seller and participants about time extension
-      const bidder = await tx.user.findUnique({ where: { id: bidderId }, select: { username: true } });
+  if (wasExtended) {
+    const [existingBids, activeAutoBids] = await Promise.all([
+      tx.bid.findMany({
+        where: { listingId },
+        select: { bidderId: true },
+        distinct: ["bidderId"],
+      }),
+      tx.autoBid.findMany({
+        where: { listingId, active: true },
+        select: { bidderId: true },
+        distinct: ["bidderId"],
+      }),
+    ]);
+    const participantIds = new Set([
+      listing.sellerId,
+      ...existingBids.map((bid) => bid.bidderId),
+      ...activeAutoBids.map((autoBid) => autoBid.bidderId),
+    ]);
+    for (const userId of Array.from(participantIds)) {
       await tx.notification.create({
         data: {
-          userId: listing.sellerId,
+          userId,
           type: "CLOSING_EXTENDED",
           title: "Closing Time Extended!",
           message: `Closing time for "${listing.title}" was extended by 1 minute due to a bid in the last 30 seconds.`,
@@ -702,25 +708,94 @@ export async function placeBid(bidderId: string, listingId: string, bidAmount: n
         },
       });
     }
+  }
 
-    // Notify seller of new bid
-    await tx.notification.create({
-      data: {
-        userId: listing.sellerId,
-        type: "NEW_BID",
-        title: "New Bid Placed!",
-        message: `New bid of ₹${currentLeadAmount} placed on your listing "${listing.title}".`,
-        listingId,
-        link: `/listings/${listingId}`,
+  await tx.notification.create({
+    data: {
+      userId: listing.sellerId,
+      type: "NEW_BID",
+      title: "New Bid Placed!",
+      message: `New bid of ₹${currentLeadAmount.toLocaleString("en-IN")} placed on your listing "${listing.title}".`,
+      listingId,
+      link: `/listings/${listingId}`,
+    },
+  });
+
+  return {
+    bid: leadingBid,
+    currentPrice: currentLeadAmount,
+    leaderId: currentLeaderId,
+    wasExtended,
+    newClosingAt,
+  };
+}
+
+export async function placeBid(bidderId: string, listingId: string, bidAmount: number) {
+  return prisma.$transaction((tx) => executeBid(tx, bidderId, listingId, bidAmount));
+}
+
+export async function setMaximumBid(
+  bidderId: string,
+  listingId: string,
+  maxAmount: number | null
+) {
+  return prisma.$transaction(async (tx) => {
+    const now = new Date();
+    const listing = await tx.listing.findUnique({
+      where: { id: listingId },
+      include: {
+        bids: { orderBy: [{ amount: "desc" }, { createdAt: "asc" }], take: 1 },
       },
     });
+    if (!listing) throw new Error("Listing not found.");
+    if (listing.sellerId === bidderId) {
+      throw new Error("The seller cannot set a maximum bid on their own auction.");
+    }
+    if (listing.status !== "ACTIVE" || listing.closingAt <= now) {
+      throw new Error("Auction has closed. Maximum bids can no longer be changed.");
+    }
+
+    const highestBid = listing.bids[0];
+    const minRequired = highestBid
+      ? highestBid.amount + listing.minIncrement
+      : listing.startingPrice;
+
+    if (maxAmount === null) {
+      await tx.autoBid.updateMany({
+        where: { listingId, bidderId, active: true },
+        data: { active: false },
+      });
+      return { removed: true };
+    }
+    if (!Number.isFinite(maxAmount) || maxAmount < minRequired) {
+      throw new Error(
+        `Maximum bid must be at least the minimum next bid of ₹${minRequired.toLocaleString("en-IN")}.`
+      );
+    }
+
+    const existing = await tx.autoBid.findUnique({
+      where: { listingId_bidderId: { listingId, bidderId } },
+    });
+    if (existing) {
+      await tx.autoBid.update({
+        where: { id: existing.id },
+        data: {
+          maxAmount,
+          active: true,
+          ...(!existing.active ? { createdAt: now } : {}),
+        },
+      });
+    } else {
+      await tx.autoBid.create({ data: { listingId, bidderId, maxAmount } });
+    }
+
+    if (highestBid?.bidderId === bidderId) {
+      return { updated: true, currentPrice: highestBid.amount, leaderId: bidderId };
+    }
 
     return {
-      bid: newBid,
-      currentPrice: currentLeadAmount,
-      leaderId: currentLeaderId,
-      wasExtended,
-      newClosingAt,
+      updated: true,
+      ...(await executeBid(tx, bidderId, listingId, minRequired, true)),
     };
   });
 }
@@ -745,51 +820,97 @@ export async function setSellerApproval(
   }
 
   if (approved) {
-    const updated = await prisma.listing.update({
-      where: { id: listingId },
-      data: {
-        status: "RESERVED",
-        outcome: `Reserved for @${listing.winner?.username || "winner"} at ₹${listing.currentPrice}. Campus handover pending.`,
-      },
-    });
-
-    if (listing.winnerId) {
-      await prisma.notification.create({
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.listing.update({
+        where: { id: listingId },
         data: {
-          userId: listing.winnerId,
+          status: "RESERVED",
+          outcome: `Reserved for @${listing.winner?.username || "winner"} at ₹${listing.currentPrice}. Campus handover pending.`,
+        },
+      });
+
+      const message = `The seller approved your winning bid of ₹${listing.currentPrice} for "${listing.title}". The item is reserved; contact the seller for campus handover.`;
+      if (listing.winnerId) {
+        await tx.notification.create({
+          data: {
+            userId: listing.winnerId,
+            type: "APPROVED",
+            title: "Winning Bid Approved",
+            message,
+            listingId,
+            link: `/listings/${listingId}`,
+          },
+        });
+        await tx.notification.create({
+          data: {
+            userId: listing.winnerId,
+            type: "RESERVED",
+            title: "Item Reserved for You",
+            message,
+            listingId,
+            link: `/listings/${listingId}`,
+          },
+        });
+      }
+      await tx.notification.create({
+        data: {
+          userId: sellerId,
           type: "APPROVED",
-          title: "Winning Bid Approved! Item Reserved",
-          message: `The seller approved your winning bid of ₹${listing.currentPrice} for "${listing.title}". Contact seller for campus handover.`,
+          title: "Winning Bid Approved",
+          message: `You approved the winning bid of ₹${listing.currentPrice} for "${listing.title}".`,
           listingId,
           link: `/listings/${listingId}`,
         },
       });
-    }
-
-    return updated;
-  } else {
-    const updated = await prisma.listing.update({
-      where: { id: listingId },
-      data: {
-        status: "REJECTED",
-        outcome: `Rejected by seller at ₹${listing.currentPrice}.`,
-      },
-    });
-
-    if (listing.winnerId) {
-      await prisma.notification.create({
+      await tx.notification.create({
         data: {
-          userId: listing.winnerId,
+          userId: sellerId,
+          type: "RESERVED",
+          title: "Item Reserved",
+          message: `You reserved "${listing.title}" for @${listing.winner?.username || "the winner"}.`,
+          listingId,
+          link: `/listings/${listingId}`,
+        },
+      });
+
+      return updated;
+    });
+  } else {
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.listing.update({
+        where: { id: listingId },
+        data: {
+          status: "REJECTED",
+          outcome: `Rejected by seller at ₹${listing.currentPrice}.`,
+        },
+      });
+
+      const message = `The seller declined the final price of ₹${listing.currentPrice} for "${listing.title}".`;
+      if (listing.winnerId) {
+        await tx.notification.create({
+          data: {
+            userId: listing.winnerId,
+            type: "REJECTED",
+            title: "Winning Price Rejected",
+            message,
+            listingId,
+            link: `/listings/${listingId}`,
+          },
+        });
+      }
+      await tx.notification.create({
+        data: {
+          userId: sellerId,
           type: "REJECTED",
           title: "Winning Price Rejected",
-          message: `The seller declined the final price of ₹${listing.currentPrice} for "${listing.title}".`,
+          message: `You rejected the winning price of ₹${listing.currentPrice} for "${listing.title}".`,
           listingId,
           link: `/listings/${listingId}`,
         },
       });
-    }
 
-    return updated;
+      return updated;
+    });
   }
 }
 
@@ -821,56 +942,67 @@ export async function confirmHandover(
   }
 
   if (success) {
-    const updated = await prisma.listing.update({
-      where: { id: listingId },
-      data: {
-        status: "COMPLETED",
-        outcome: `Campus handover completed. Delivered to @${listing.winner?.username} for ₹${listing.currentPrice}.`,
-      },
-    });
-
-    const otherUserId = isSeller ? listing.winnerId : listing.sellerId;
-    if (otherUserId) {
-      await prisma.notification.create({
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.listing.update({
+        where: { id: listingId },
         data: {
-          userId: otherUserId,
-          type: "HANDOVER_COMPLETED",
-          title: "Handover Confirmed!",
-          message: `Campus handover for "${listing.title}" is successfully marked as COMPLETED.`,
-          listingId,
-          link: `/listings/${listingId}`,
+          status: "COMPLETED",
+          outcome: `Campus handover completed. Delivered to @${listing.winner?.username} for ₹${listing.currentPrice}.`,
         },
       });
-    }
 
-    return updated;
+      const message = `Campus handover for "${listing.title}" is successfully marked as COMPLETED.`;
+      const recipients = listing.winnerId
+        ? [listing.sellerId, listing.winnerId]
+        : [listing.sellerId];
+      for (const recipientId of Array.from(new Set(recipients))) {
+        await tx.notification.create({
+          data: {
+            userId: recipientId,
+            type: "HANDOVER_COMPLETED",
+            title: "Handover Confirmed!",
+            message,
+            listingId,
+            link: `/listings/${listingId}`,
+          },
+        });
+      }
+
+      return updated;
+    });
   } else {
     // Only seller can mark pickup failed
     if (!isSeller) {
       throw new Error("Only the seller can mark a handover as failed.");
     }
 
-    const updated = await prisma.listing.update({
-      where: { id: listingId },
-      data: {
-        status: "PICKUP_FAILED",
-        outcome: "Campus pickup failed. Item was not handed over.",
-      },
-    });
-
-    if (listing.winnerId) {
-      await prisma.notification.create({
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.listing.update({
+        where: { id: listingId },
         data: {
-          userId: listing.winnerId,
-          type: "HANDOVER_FAILED",
-          title: "Campus Pickup Failed",
-          message: `Seller marked pickup as failed for "${listing.title}". Outcome: Pickup Failed.`,
-          listingId,
-          link: `/listings/${listingId}`,
+          status: "PICKUP_FAILED",
+          outcome: "Campus pickup failed. Item was not handed over.",
         },
       });
-    }
 
-    return updated;
+      const message = `Seller marked pickup as failed for "${listing.title}". Outcome: Pickup Failed.`;
+      const recipients = listing.winnerId
+        ? [listing.sellerId, listing.winnerId]
+        : [listing.sellerId];
+      for (const recipientId of Array.from(new Set(recipients))) {
+        await tx.notification.create({
+          data: {
+            userId: recipientId,
+            type: "HANDOVER_FAILED",
+            title: "Campus Pickup Failed",
+            message,
+            listingId,
+            link: `/listings/${listingId}`,
+          },
+        });
+      }
+
+      return updated;
+    });
   }
 }

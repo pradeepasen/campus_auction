@@ -4,17 +4,18 @@ import { prisma } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const userId = await getCurrentUserId();
     if (!userId) {
       return NextResponse.json({ notifications: [], unreadCount: 0 });
     }
 
+    const allNotifications = new URL(req.url).searchParams.get("all") === "1";
     const notifications = await prisma.notification.findMany({
       where: { userId },
       orderBy: { createdAt: "desc" },
-      take: 30,
+      ...(allNotifications ? {} : { take: 30 }),
     });
 
     const unreadCount = await prisma.notification.count({
@@ -36,10 +37,13 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json().catch(() => ({}));
     if (body.notificationId) {
-      await prisma.notification.update({
+      const result = await prisma.notification.updateMany({
         where: { id: body.notificationId, userId },
         data: { isRead: true },
       });
+      if (result.count === 0) {
+        return NextResponse.json({ error: "Notification not found." }, { status: 404 });
+      }
     } else {
       await prisma.notification.updateMany({
         where: { userId, isRead: false },

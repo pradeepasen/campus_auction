@@ -47,11 +47,14 @@ export function Navbar() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [browserNotificationsEnabled, setBrowserNotificationsEnabled] = useState(false);
+  const [notificationPermissionMessage, setNotificationPermissionMessage] = useState("");
   const [toast, setToast] = useState<{ title: string; message: string; link?: string | null } | null>(null);
 
   const notifRef = useRef<HTMLDivElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
-  const prevCountRef = useRef<number | null>(null);
+  const knownNotificationIdsRef = useRef<Set<string> | null>(null);
+  const browserNotifiedIdsRef = useRef<Set<string>>(new Set());
+  const pollingRef = useRef(false);
 
   // Load current user
   async function fetchUser() {
@@ -68,50 +71,105 @@ export function Navbar() {
 
   // Load notifications and tick server
   async function pollServer() {
+    if (pollingRef.current) return;
+    pollingRef.current = true;
     try {
       // Background tick on server to close expired auctions
       fetch("/api/tick").catch(() => {});
 
-      if (user) {
-        const res = await fetch("/api/notifications");
-        if (res.ok) {
-          const data = await res.json();
-          const newCount = data.unreadCount || 0;
-          const prev = prevCountRef.current;
+      if (!user) return;
 
-          // If unread count increased, show toast and/or desktop notification
-          if (prev !== null && newCount > prev && data.notifications?.length > 0) {
-            const latest = data.notifications[0];
+      const res = await fetch("/api/notifications");
+      if (res.ok) {
+        const data = await res.json();
+        const currentNotifications: NotificationItem[] = data.notifications || [];
+        const knownIds = knownNotificationIdsRef.current;
+
+        if (knownIds) {
+          const newNotifications = currentNotifications.filter(
+            (notification) => !knownIds.has(notification.id)
+          );
+          const latest = newNotifications[0];
+          if (latest) {
             setToast({
               title: latest.title,
               message: latest.message,
               link: latest.link,
             });
             setTimeout(() => setToast(null), 6000);
-
-            // Web Notification trigger for desktop
-            if (
-              browserNotificationsEnabled &&
-              typeof window !== "undefined" &&
-              "Notification" in window &&
-              Notification.permission === "granted"
-            ) {
-              new Notification(latest.title, {
-                body: latest.message,
-                icon: "/favicon.ico",
-              });
-            }
           }
 
-          prevCountRef.current = newCount;
-          setNotifications(data.notifications || []);
-          setUnreadCount(newCount);
+          if (
+            browserNotificationsEnabled &&
+            document.visibilityState === "hidden" &&
+            typeof window !== "undefined" &&
+            "Notification" in window &&
+            Notification.permission === "granted"
+          ) {
+            for (const notification of newNotifications) {
+              if (browserNotifiedIdsRef.current.has(notification.id)) continue;
+              const browserNotification = new Notification(notification.title, {
+                body: notification.message,
+                icon: "/favicon.ico",
+                tag: `campusbids-${notification.id}`,
+              });
+              browserNotifiedIdsRef.current.add(notification.id);
+              browserNotification.onclick = () => {
+                window.focus();
+                if (notification.link) router.push(notification.link);
+                browserNotification.close();
+              };
+            }
+            try {
+              const seenIds = Array.from(browserNotifiedIdsRef.current).slice(-200);
+              localStorage.setItem("campusbids.browserNotifiedIds", JSON.stringify(seenIds));
+            } catch (error) {
+              console.error("Could not save browser notification history:", error);
+            }
+          }
         }
+
+        if (!knownNotificationIdsRef.current) {
+          knownNotificationIdsRef.current = new Set(
+            currentNotifications.map((notification) => notification.id)
+          );
+        } else {
+          for (const notification of currentNotifications) {
+            knownNotificationIdsRef.current.add(notification.id);
+          }
+        }
+        setNotifications(currentNotifications);
+        setUnreadCount(data.unreadCount || 0);
       }
     } catch (err) {
       console.error("Polling error:", err);
+    } finally {
+      pollingRef.current = false;
     }
   }
+
+  useEffect(() => {
+    try {
+      const storedIds = JSON.parse(
+        localStorage.getItem("campusbids.browserNotifiedIds") || "[]"
+      );
+      if (Array.isArray(storedIds)) {
+        browserNotifiedIdsRef.current = new Set(
+          storedIds.filter((id): id is string => typeof id === "string")
+        );
+      }
+      const enabled = localStorage.getItem("campusbids.browserNotificationsEnabled") === "true";
+      const supported = typeof window !== "undefined" && "Notification" in window;
+      setBrowserNotificationsEnabled(
+        enabled && supported && Notification.permission === "granted"
+      );
+      if (enabled && supported && Notification.permission === "denied") {
+        setNotificationPermissionMessage("Browser notifications are blocked in your browser settings.");
+      }
+    } catch (error) {
+      console.error("Could not restore notification preferences:", error);
+    }
+  }, []);
 
   useEffect(() => {
     fetchUser();
@@ -120,29 +178,53 @@ export function Navbar() {
   // Poll server every 2 seconds as specified in requirements
   useEffect(() => {
     pollServer();
-    const interval = setInterval(pollServer, 2000);
+    const interval = setInterval(pollServer, 2500);
     return () => clearInterval(interval);
-  }, [user, browserNotificationsEnabled, unreadCount]);
+  }, [user, browserNotificationsEnabled]);
 
   // Request browser notification permission
   function toggleBrowserNotifications() {
+    setNotificationPermissionMessage("");
     if (typeof window === "undefined" || !("Notification" in window)) {
-      alert("This browser does not support desktop notifications.");
+      setNotificationPermissionMessage("This browser does not support desktop notifications.");
       return;
     }
 
     if (Notification.permission === "granted") {
-      setBrowserNotificationsEnabled(!browserNotificationsEnabled);
+      const enabled = !browserNotificationsEnabled;
+      setBrowserNotificationsEnabled(enabled);
+      try {
+        localStorage.setItem("campusbids.browserNotificationsEnabled", String(enabled));
+      } catch (error) {
+        console.error("Could not save browser notification preference:", error);
+      }
     } else if (Notification.permission !== "denied") {
       Notification.requestPermission().then((permission) => {
         if (permission === "granted") {
           setBrowserNotificationsEnabled(true);
+          try {
+            localStorage.setItem("campusbids.browserNotificationsEnabled", "true");
+          } catch (error) {
+            console.error("Could not save browser notification preference:", error);
+          }
         } else {
           setBrowserNotificationsEnabled(false);
+          try {
+            localStorage.setItem("campusbids.browserNotificationsEnabled", "false");
+          } catch (error) {
+            console.error("Could not save browser notification preference:", error);
+          }
+          setNotificationPermissionMessage("Browser notification permission was not granted.");
         }
       });
     } else {
-      alert("Browser notification permission is blocked in your browser settings.");
+      setBrowserNotificationsEnabled(false);
+      try {
+        localStorage.setItem("campusbids.browserNotificationsEnabled", "false");
+      } catch (error) {
+        console.error("Could not save browser notification preference:", error);
+      }
+      setNotificationPermissionMessage("Browser notifications are blocked in your browser settings.");
     }
   }
 
@@ -273,6 +355,13 @@ export function Navbar() {
                       )}
                     </div>
                     <div className="flex items-center gap-1">
+                      <Link
+                        href="/notifications"
+                        onClick={() => setShowNotifications(false)}
+                        className="text-xs text-blue-600 hover:underline font-medium mr-2"
+                      >
+                        View all
+                      </Link>
                       {/* Browser notification toggle */}
                       <button
                         onClick={toggleBrowserNotifications}
@@ -305,6 +394,11 @@ export function Navbar() {
                       )}
                     </div>
                   </div>
+                  {notificationPermissionMessage && (
+                    <p role="status" className="px-4 py-2 text-[11px] text-amber-700 bg-amber-50">
+                      {notificationPermissionMessage}
+                    </p>
+                  )}
 
                   <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
                     {notifications.length === 0 ? (
