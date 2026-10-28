@@ -30,31 +30,31 @@ export function StatusBadge({
     case "COMPLETED":
       return (
         <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-purple-100 text-purple-800 border border-purple-200">
-          🎉 Handover Completed
+          🎉 Completed
         </span>
       );
     case "CLOSED_UNSOLD":
       return (
         <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-          Closed (Unsold)
+          Unsold
         </span>
       );
     case "REJECTED":
       return (
         <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-800 border border-red-200">
-          ❌ Offer Rejected
+          ❌ Rejected by seller
         </span>
       );
     case "CANCELLED":
       return (
         <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-100 text-rose-800 border border-rose-200">
-          🚫 Cancelled by Seller
+          🚫 Cancelled by seller
         </span>
       );
     case "PICKUP_FAILED":
       return (
         <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-orange-100 text-orange-800 border border-orange-200">
-          ⚠️ Campus Pickup Failed
+          ⚠️ Pickup failed
         </span>
       );
     default:

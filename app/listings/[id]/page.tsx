@@ -45,6 +45,7 @@ interface ListingDetail {
   minIncrement: number;
   currentPrice: number;
   closingAt: string;
+  serverTime: string;
   status: string;
   outcome?: string | null;
   sellerId: string;
@@ -265,7 +266,10 @@ export default function ListingDetailPage() {
 
         <div className="flex items-center gap-2">
           {listing.status === "ACTIVE" ? (
-            <CountdownTimer closingAt={listing.closingAt} />
+            <CountdownTimer
+              closingAt={listing.closingAt}
+              serverTime={listing.serverTime}
+            />
           ) : (
             <StatusBadge status={listing.status} outcome={listing.outcome} />
           )}
@@ -487,8 +491,33 @@ export default function ListingDetailPage() {
                       />
                     </div>
                     <div className="flex items-center justify-between text-[11px] text-slate-500 mt-1">
-                      <span>Minimum required: ₹{minValidBid.toLocaleString("en-IN")}</span>
-                      <span>Increment: +₹{listing.minIncrement}</span>
+                      <span>Minimum next bid: <strong className="text-slate-900 font-mono">₹{minValidBid.toLocaleString("en-IN")}</strong></span>
+                      <span>Min increment: +₹{listing.minIncrement}</span>
+                    </div>
+
+                    {/* Quick Bid Suggestion Pills */}
+                    <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
+                      <button
+                        type="button"
+                        onClick={() => setBidAmount(minValidBid.toString())}
+                        className="px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-700 hover:bg-blue-50 hover:border-blue-300 transition"
+                      >
+                        Exact Min: ₹{minValidBid}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBidAmount((minValidBid + listing.minIncrement).toString())}
+                        className="px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-700 hover:bg-blue-50 hover:border-blue-300 transition"
+                      >
+                        +₹{listing.minIncrement} (₹{minValidBid + listing.minIncrement})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBidAmount((minValidBid + listing.minIncrement * 2).toString())}
+                        className="px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-700 hover:bg-blue-50 hover:border-blue-300 transition"
+                      >
+                        +₹{listing.minIncrement * 2} (₹{minValidBid + listing.minIncrement * 2})
+                      </button>
                     </div>
                   </div>
 
@@ -623,6 +652,11 @@ export default function ListingDetailPage() {
                             )}
                           </div>
                           <div className="text-[10px] text-slate-400">
+                            {new Date(bid.createdAt).toLocaleDateString([], {
+                              day: "numeric",
+                              month: "short",
+                            })}{" "}
+                            •{" "}
                             {new Date(bid.createdAt).toLocaleTimeString([], {
                               hour: "2-digit",
                               minute: "2-digit",

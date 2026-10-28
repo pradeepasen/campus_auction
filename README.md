@@ -34,30 +34,35 @@ It is the last day of final semester exams. Seniors are leaving campus within a 
 npm install
 ```
 
-### 3. Initialize Database & Seed
+### 3. Configure Environment
+Copy `.env.example` to `.env` and set `SESSION_SECRET` to a unique random value of at least 32 bytes. Generate one with:
 ```bash
-npm run seed
+node -p "require('crypto').randomBytes(32).toString('hex')"
 ```
-*This synchronizes the SQLite schema and seeds 4 demo student profiles, 16 realistic listings across all categories with varying closing times (from 2 minutes to 3 days), existing bids, and sample wishlist wants.*
+Do not commit `.env` or reuse the example value.
 
-### 4. Start Development Server
+### 4. Initialize the Database
+```bash
+npm run prisma:push
+```
+
+### 5. Start Development Server
 ```bash
 npm run dev
 ```
 Open **[http://localhost:3000](http://localhost:3000)** in your browser.
 
+To run the concurrent bid and authentication checks while the server is running:
+```bash
+npm run test:bids
+```
+The test creates temporary bidder accounts and listings, then removes those fixtures when it finishes.
+
 ---
 
-## 👥 Registered Campus Accounts
+## 👥 Create an Account
 
-All registered student accounts can sign in manually on `/login`:
-
-| Username | Student Name | Role & Department | Bio / Listing Focus | Password |
-|---|---|---|---|---|
-| `aarav` | Aarav Sharma | Senior • Mechanical | Selling cycle, TI-84 calculator, B.S. Grewal math, headphones | `password123` |
-| `priya` | Priya Patel | Senior • Computer Science | Selling Casio ClassWiz, CLRS 4th Ed, Raspberry Pi 4 kit, desk lamp | `password123` |
-| `rohit` | Rohit Verma | Junior • Electrical | Active buyer looking for campus cycles & engineering books | `password123` |
-| `ananya` | Ananya Iyer | Junior • Information Tech | Active buyer looking for electronics and scientific calculators | `password123` |
+Open `/login` and choose **Create one**. Register with your name, a unique username and email, and a password of at least 8 characters. The account is signed in automatically after registration. There are no default or shared demo credentials.
 
 ---
 
@@ -68,7 +73,7 @@ All registered student accounts can sign in manually on `/login`:
    - All listing statuses: `ACTIVE`, `CLOSED_UNSOLD`, `PENDING_APPROVAL`, `RESERVED`, `COMPLETED`, `REJECTED`, `CANCELLED`, `PICKUP_FAILED`.
 
 2. **Session Authentication**:
-   - Secure signed session cookies with hashed passwords using `bcryptjs`.
+   - Signed session cookies require a configured `SESSION_SECRET`; passwords are verified with `bcryptjs`, and invalid credentials cannot create accounts or sessions.
    - 1-click user switcher in Navbar for seamless testing between buyers and sellers.
 
 3. **Listings Management**:

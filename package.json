@@ -9,7 +9,6 @@
     "lint": "next lint",
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
-    "seed": "tsx prisma/seed.ts",
     "test:bids": "tsx scripts/test-bids.ts"
   },
   "dependencies": {

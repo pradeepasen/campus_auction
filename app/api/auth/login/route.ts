@@ -1,12 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { verifyPassword, hashPassword, createSessionCookie } from "@/lib/auth";
+import { verifyPassword, createSessionCookie } from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
   try {
-    const { username, password } = await req.json();
+    const body = await req.json();
+    const username = body?.username;
+    const password = body?.password;
 
-    if (!username || !username.trim() || !password) {
+    if (
+      typeof username !== "string" ||
+      !username.trim() ||
+      typeof password !== "string" ||
+      !password
+    ) {
       return NextResponse.json(
         { error: "Username and password are required." },
         { status: 400 }
@@ -15,7 +22,7 @@ export async function POST(req: NextRequest) {
 
     const cleanUsername = username.trim().toLowerCase();
 
-    let user = await prisma.user.findFirst({
+    const user = await prisma.user.findFirst({
       where: {
         OR: [
           { username: cleanUsername },
@@ -24,29 +31,11 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    if (user) {
-      // User exists. Verify password or update hash to ensure user is never blocked
-      const isMatch = await verifyPassword(password, user.passwordHash);
-      if (!isMatch) {
-        const newHash = await hashPassword(password);
-        user = await prisma.user.update({
-          where: { id: user.id },
-          data: { passwordHash: newHash },
-        });
-      }
-    } else {
-      // User does not exist yet. Automatically register campus student account
-      const passwordHash = await hashPassword(password);
-      const displayName = cleanUsername.charAt(0).toUpperCase() + cleanUsername.slice(1);
-      user = await prisma.user.create({
-        data: {
-          username: cleanUsername,
-          name: `${displayName} (Student)`,
-          email: `${cleanUsername}@campus.edu`,
-          passwordHash,
-          avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${cleanUsername}`,
-        },
-      });
+    if (!user || !(await verifyPassword(password, user.passwordHash))) {
+      return NextResponse.json(
+        { error: "Invalid username or password." },
+        { status: 401 }
+      );
     }
 
     await createSessionCookie(user.id);

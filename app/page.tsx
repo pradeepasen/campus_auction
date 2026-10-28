@@ -28,6 +28,7 @@ interface Listing {
   currentPrice: number;
   closingAt: string;
   status: string;
+  serverTime: string;
   outcome?: string | null;
   bidCount: number;
   leadingBidder?: { id: string; username: string; name: string } | null;
@@ -365,7 +366,11 @@ export default function HomePage() {
 
                   <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between">
                     {item.status === "ACTIVE" ? (
-                      <CountdownTimer closingAt={item.closingAt} compact />
+                      <CountdownTimer
+                        closingAt={item.closingAt}
+                        serverTime={item.serverTime}
+                        compact
+                      />
                     ) : (
                       <StatusBadge status={item.status} outcome={item.outcome} />
                     )}

@@ -10,19 +10,40 @@ function LoginForm() {
   const redirectTo = searchParams.get("redirect") || "/";
 
   const [username, setUsername] = useState("");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [isRegistering, setIsRegistering] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [fieldErrors, setFieldErrors] = useState<{ username?: string; password?: string }>({});
+  const [fieldErrors, setFieldErrors] = useState<{
+    name?: string;
+    username?: string;
+    email?: string;
+    password?: string;
+    confirmPassword?: string;
+  }>({});
   const [authError, setAuthError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
   function validateForm() {
-    const errors: { username?: string; password?: string } = {};
+    const errors: typeof fieldErrors = {};
+    if (isRegistering && !name.trim()) {
+      errors.name = "Please enter your name.";
+    }
     if (!username.trim()) {
       errors.username = "Please enter your username.";
     }
+    if (isRegistering && !email.trim()) {
+      errors.email = "Please enter your email.";
+    }
     if (!password) {
       errors.password = "Please enter your password.";
+    } else if (isRegistering && password.length < 8) {
+      errors.password = "Use at least 8 characters.";
+    }
+    if (isRegistering && password !== confirmPassword) {
+      errors.confirmPassword = "Passwords do not match.";
     }
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
@@ -39,13 +60,14 @@ function LoginForm() {
     setIsLoading(true);
 
     try {
-      const res = await fetch("/api/auth/login", {
+      const res = await fetch(isRegistering ? "/api/auth/register" : "/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: username.trim(),
-          password,
-        }),
+        body: JSON.stringify(
+          isRegistering
+            ? { name: name.trim(), username: username.trim(), email: email.trim(), password }
+            : { username: username.trim(), password }
+        ),
       });
 
       const data = await res.json();
@@ -71,10 +93,12 @@ function LoginForm() {
           <Gavel className="w-7 h-7" />
         </div>
         <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-          Welcome Back
+          {isRegistering ? "Create Your Account" : "Welcome Back"}
         </h1>
         <p className="text-sm text-slate-500 mt-2">
-          Sign in to your Campus Auction account to continue.
+          {isRegistering
+            ? "Register to bid on and list campus items."
+            : "Sign in to your Campus Auction account to continue."}
         </p>
       </div>
 
@@ -91,6 +115,43 @@ function LoginForm() {
 
       {/* Login Form */}
       <form onSubmit={handleSubmit} noValidate className="space-y-5">
+        {isRegistering && (
+          <>
+            <div>
+              <label htmlFor="name" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                Full Name
+              </label>
+              <input
+                id="name"
+                name="name"
+                type="text"
+                autoComplete="name"
+                value={name}
+                disabled={isLoading}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              {fieldErrors.name && <p className="text-xs text-red-600 mt-1.5">{fieldErrors.name}</p>}
+            </div>
+            <div>
+              <label htmlFor="email" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                Email
+              </label>
+              <input
+                id="email"
+                name="email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                disabled={isLoading}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              {fieldErrors.email && <p className="text-xs text-red-600 mt-1.5">{fieldErrors.email}</p>}
+            </div>
+          </>
+        )}
+
         {/* Username Field */}
         <div>
           <label
@@ -126,6 +187,9 @@ function LoginForm() {
               {fieldErrors.username}
             </p>
           )}
+          {isRegistering && (
+            <p className="text-[11px] text-slate-500 mt-1">3–24 characters: letters, numbers, and underscores.</p>
+          )}
         </div>
 
         {/* Password Field */}
@@ -141,7 +205,7 @@ function LoginForm() {
               id="password"
               name="password"
               type={showPassword ? "text" : "password"}
-              autoComplete="current-password"
+              autoComplete={isRegistering ? "new-password" : "current-password"}
               placeholder="Enter your password"
               value={password}
               disabled={isLoading}
@@ -180,7 +244,30 @@ function LoginForm() {
           )}
         </div>
 
-        {/* Sign In Button */}
+        {isRegistering && (
+          <div>
+            <label
+              htmlFor="confirmPassword"
+              className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2"
+            >
+              Confirm Password
+            </label>
+            <input
+              id="confirmPassword"
+              name="confirmPassword"
+              type={showPassword ? "text" : "password"}
+              autoComplete="new-password"
+              value={confirmPassword}
+              disabled={isLoading}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            {fieldErrors.confirmPassword && (
+              <p className="text-xs text-red-600 mt-1.5">{fieldErrors.confirmPassword}</p>
+            )}
+          </div>
+        )}
+
         <button
           type="submit"
           disabled={isLoading}
@@ -189,18 +276,28 @@ function LoginForm() {
           {isLoading ? (
             <>
               <Loader2 className="w-4 h-4 animate-spin" />
-              <span>Signing in...</span>
+              <span>{isRegistering ? "Creating account..." : "Signing in..."}</span>
             </>
           ) : (
-            <span>Sign In</span>
+            <span>{isRegistering ? "Create Account" : "Sign In"}</span>
           )}
         </button>
       </form>
 
-      {/* Sign-Up Guidance */}
       <div className="mt-8 pt-6 border-t border-slate-100 text-center">
         <p className="text-xs text-slate-500 leading-relaxed">
-          Don&apos;t have an account? Contact your campus administrator to get access.
+          {isRegistering ? "Already have an account?" : "Don’t have an account?"}{" "}
+          <button
+            type="button"
+            onClick={() => {
+              setIsRegistering(!isRegistering);
+              setFieldErrors({});
+              setAuthError("");
+            }}
+            className="font-semibold text-blue-600 hover:text-blue-700"
+          >
+            {isRegistering ? "Sign in" : "Create one"}
+          </button>
         </p>
       </div>
     </div>

@@ -1,19 +1,22 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Clock } from "lucide-react";
 
 interface CountdownTimerProps {
   closingAt: string | Date;
+  serverTime?: string | Date;
   onExpire?: () => void;
   compact?: boolean;
 }
 
 export function CountdownTimer({
   closingAt,
+  serverTime,
   onExpire,
   compact = false,
 }: CountdownTimerProps) {
+  const expiredAtRef = useRef<number | null>(null);
   const [timeLeft, setTimeLeft] = useState<{
     days: number;
     hours: number;
@@ -31,9 +34,12 @@ export function CountdownTimer({
   });
 
   useEffect(() => {
+    const serverNow = serverTime ? new Date(serverTime).getTime() : NaN;
+    const clockOffset = Number.isFinite(serverNow) ? serverNow - Date.now() : 0;
+
     function calculate() {
       const target = new Date(closingAt).getTime();
-      const now = Date.now();
+      const now = Date.now() + clockOffset;
       const diff = target - now;
 
       if (diff <= 0) {
@@ -45,9 +51,14 @@ export function CountdownTimer({
           totalMs: 0,
           isExpired: true,
         });
-        if (onExpire) onExpire();
+        if (expiredAtRef.current !== target) {
+          expiredAtRef.current = target;
+          onExpire?.();
+        }
         return;
       }
+
+      if (expiredAtRef.current === target) expiredAtRef.current = null;
 
       const days = Math.floor(diff / (1000 * 60 * 60 * 24));
       const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
@@ -67,7 +78,7 @@ export function CountdownTimer({
     calculate();
     const interval = setInterval(calculate, 1000);
     return () => clearInterval(interval);
-  }, [closingAt, onExpire]);
+  }, [closingAt, onExpire, serverTime]);
 
   if (timeLeft.isExpired) {
     return (

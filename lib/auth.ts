@@ -4,8 +4,15 @@ import bcrypt from "bcryptjs";
 import { prisma } from "./db";
 
 const SESSION_COOKIE_NAME = "campus_auction_session";
-const SESSION_SECRET = process.env.SESSION_SECRET || "fallback-secret-campus-auction-2026";
+const SESSION_SECRET = process.env.SESSION_SECRET;
 const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function getSessionSecret(): string {
+  if (!SESSION_SECRET || Buffer.byteLength(SESSION_SECRET) < 32) {
+    throw new Error("SESSION_SECRET must be configured with at least 32 bytes.");
+  }
+  return SESSION_SECRET;
+}
 
 export interface PublicUser {
   id: string;
@@ -22,7 +29,7 @@ export interface SessionData {
 function signSession(data: SessionData): string {
   const json = JSON.stringify(data);
   const base64 = Buffer.from(json).toString("base64url");
-  const hmac = crypto.createHmac("sha256", SESSION_SECRET).update(base64).digest("base64url");
+  const hmac = crypto.createHmac("sha256", getSessionSecret()).update(base64).digest("base64url");
   return `${base64}.${hmac}`;
 }
 
@@ -30,7 +37,7 @@ function verifySession(token: string): SessionData | null {
   try {
     const [base64, hmac] = token.split(".");
     if (!base64 || !hmac) return null;
-    const expectedHmac = crypto.createHmac("sha256", SESSION_SECRET).update(base64).digest("base64url");
+    const expectedHmac = crypto.createHmac("sha256", getSessionSecret()).update(base64).digest("base64url");
     if (!crypto.timingSafeEqual(Buffer.from(hmac), Buffer.from(expectedHmac))) {
       return null;
     }
