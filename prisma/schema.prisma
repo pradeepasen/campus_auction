@@ -1,0 +1,144 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(uuid())
+  username     String    @unique
+  name         String
+  email        String    @unique
+  passwordHash String
+  phone        String?
+  avatar       String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  listings     Listing[] @relation("SellerListings")
+  wonListings  Listing[] @relation("WonListings")
+  bids         Bid[]
+  autoBids     AutoBid[]
+  questions    Question[]
+  wants        Want[]
+  notifications Notification[]
+  proposals    AssistantProposal[]
+}
+
+model Listing {
+  id                String       @id @default(uuid())
+  sellerId          String
+  seller            User         @relation("SellerListings", fields: [sellerId], references: [id], onDelete: Cascade)
+  title             String
+  category          String       // CYCLE, CALCULATOR, BOOKS, ELECTRONICS, OTHER
+  description       String
+  condition         String       // NEW, LIKE_NEW, GOOD, FAIR, POOR
+  photos            String       @default("[]") // JSON string array: ["/uploads/..."]
+  startingPrice     Float
+  minIncrement      Float
+  currentPrice      Float
+  closingAt         DateTime
+  originalClosingAt DateTime
+  status            String       @default("ACTIVE")
+  // Statuses: ACTIVE, CLOSED_UNSOLD, PENDING_APPROVAL, RESERVED, COMPLETED, REJECTED, CANCELLED, PICKUP_FAILED
+  outcome           String?
+  winnerId          String?
+  winner            User?        @relation("WonListings", fields: [winnerId], references: [id], onDelete: SetNull)
+  winningBidId      String?
+  extensionCount    Int          @default(0)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  bids              Bid[]
+  autoBids          AutoBid[]
+  questions         Question[]
+}
+
+model Bid {
+  id         String   @id @default(uuid())
+  listingId  String
+  listing    Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  bidderId   String
+  bidder     User     @relation(fields: [bidderId], references: [id], onDelete: Cascade)
+  amount     Float
+  isAutoBid  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([listingId, createdAt])
+}
+
+model AutoBid {
+  id        String   @id @default(uuid())
+  listingId String
+  listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  bidderId  String
+  bidder    User     @relation(fields: [bidderId], references: [id], onDelete: Cascade)
+  maxAmount Float
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([listingId, bidderId])
+}
+
+model Question {
+  id           String    @id @default(uuid())
+  listingId    String
+  listing      Listing   @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  askerId      String
+  asker        User      @relation(fields: [askerId], references: [id], onDelete: Cascade)
+  questionText String
+  answerText   String?
+  answeredAt   DateTime?
+  isHidden     Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+
+  @@index([listingId])
+}
+
+model Want {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  keywords  String
+  category  String?
+  maxPrice  Float?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  // OUTBID, PROVISIONAL_WINNER, NEW_BID, AUCTION_CLOSED, APPROVAL_NEEDED, APPROVED, REJECTED, RESERVED, HANDOVER_COMPLETED, HANDOVER_FAILED, WISHLIST_MATCH, QUESTION_ANSWERED, CLOSING_EXTENDED, LISTING_CANCELLED
+  title     String
+  message   String
+  listingId String?
+  link      String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead])
+}
+
+model AssistantProposal {
+  id           String    @id @default(uuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listingId    String
+  actionType   String    // "BID" | "AUTO_BID"
+  agreedAmount Float
+  status       String    @default("PENDING") // PENDING, APPROVED, REJECTED, EXECUTED, EXPIRED
+  createdAt    DateTime  @default(now())
+  executedAt   DateTime?
+
+  @@index([userId, status])
+}
